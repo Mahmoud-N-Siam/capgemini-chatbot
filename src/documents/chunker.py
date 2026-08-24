@@ -6,6 +6,8 @@ class TextChunker:
     def __init__(self, chunk_size: int = None, overlap: int = 200):
         self.chunk_size = chunk_size or Settings.CHUNK_SIZE
         self.overlap = overlap
+        if self.chunk_size <= 0 or self.overlap < 0 or self.overlap >= self.chunk_size:
+            raise ValueError("chunk_size must be positive and greater than overlap")
 
     def chunk_by_size(self, text: str) -> List[str]:
         chunks = []

@@ -21,6 +21,10 @@
 .document-item .file-size{font-size:0.8em;color:#666}
 .upload-area{border:2px dashed #ddd;border-radius:8px;padding:20px;text-align:center;cursor:pointer;margin-bottom:15px}
 .upload-area:hover{border-color:#007bff;background:#f8f9fa}
+.chat-options{display:flex;flex-direction:column;gap:10px;margin-bottom:15px;font-size:0.9em}
+.chat-options label{display:flex;align-items:center;gap:8px}
+.chat-options select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;background:white}
+.clear-history{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;background:white;cursor:pointer}
 .welcome-message{text-align:center;padding:40px 20px;color:#666}
 .typing-indicator{display:inline-flex;gap:5px}
 .typing-indicator span{width:8px;height:8px;background:#666;border-radius:50%;animation:bounce 1.4s infinite ease-in-out both}
@@ -35,9 +39,15 @@
         <h2>📁 Documents</h2>
         <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
             <p>📄 Drag & drop or click to browse</p>
-            <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md" style="display:none" onchange="handleFileUpload(event)">
+            <input type="file" id="file-input" accept=".docx,.txt,.md" style="display:none" onchange="handleFileUpload(event)">
         </div>
         <div class="document-list" id="document-list"><p style="text-align:center;color:#666">No documents yet</p></div>
+        <div class="chat-options">
+            <label for="model-select">Model</label>
+            <select id="model-select" aria-label="Model"></select>
+            <label><input type="checkbox" id="web-search"> Use web search</label>
+            <button type="button" class="clear-history" id="clear-history">Clear history</button>
+        </div>
     </aside>
     <div class="chat-area">
         <div class="chat-messages" id="chat-messages">
@@ -59,6 +69,38 @@ const sendBtn=document.getElementById('send-btn');
 const chatMessages=document.getElementById('chat-messages');
 const documentList=document.getElementById('document-list');
 const fileInput=document.getElementById('file-input');
+const modelSelect=document.getElementById('model-select');
+const webSearch=document.getElementById('web-search');
+const clearHistoryButton=document.getElementById('clear-history');
+
+async function loadState(){
+    try{
+        const [documentsResponse,historyResponse,modelsResponse]=await Promise.all([
+            fetch('/api/documents'),fetch('/api/conversation'),fetch('/api/models')
+        ]);
+        if(!documentsResponse.ok||!historyResponse.ok||!modelsResponse.ok)throw new Error('Could not load chat state');
+        documents=await documentsResponse.json();
+        renderDocuments();
+        const history=await historyResponse.json();
+        if(history.length){chatMessages.innerHTML='';history.forEach(addMessage);conversation=history}
+        const models=await modelsResponse.json();
+        modelSelect.innerHTML='';
+        models.forEach(model=>{
+            const option=document.createElement('option');option.value=model.name;
+            option.textContent=model.name;modelSelect.appendChild(option);
+        });
+    }catch(error){addSystemMessage(`Could not load saved state: ${error.message}`)}
+}
+function renderDocuments(){
+    documentList.innerHTML='';
+    if(!documents.length){documentList.innerHTML='<p style="text-align:center;color:#666">No documents yet</p>';return}
+    documents.forEach(addDocumentToList);
+}
+async function clearHistory(){
+    const response=await fetch('/api/conversation',{method:'DELETE'});
+    if(!response.ok)throw new Error(await response.text());
+    conversation=[];chatMessages.innerHTML='<div class="welcome-message"><h3>Welcome!</h3><p>Upload documents and start chatting.</p></div>';
+}
 
 function handleFileUpload(event){
     if(event.target.files.length>0) uploadFile(event.target.files[0]);
@@ -77,7 +119,10 @@ async function uploadFile(file){
 }
 function addDocumentToList(doc){
     const div=document.createElement('div');div.className='document-item';
-    div.innerHTML=`<div><div class="file-name">${doc.file_name}</div><div class="file-size">${formatFileSize(doc.file_size)}</div></div>`;
+    const details=document.createElement('div');const name=document.createElement('div');
+    const size=document.createElement('div');name.className='file-name';size.className='file-size';
+    name.textContent=doc.file_name;size.textContent=formatFileSize(doc.file_size);details.append(name,size);div.appendChild(details);
+    if(documentList.querySelector('p'))documentList.innerHTML='';
     documentList.appendChild(div);
 }
 function addMessage(msg){
@@ -99,13 +144,28 @@ async function sendMessage(){
     typingDiv.innerHTML='<div class="typing-indicator"><span></span><span></span><span></span></div>';
     chatMessages.appendChild(typingDiv);chatMessages.scrollTop=chatMessages.scrollHeight;
     try{
-        const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
-              body:JSON.stringify({message:message,document_ids:documents.map(d=>d.id),use_search:true})});
+        const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},
+              body:JSON.stringify({message:message,document_ids:documents.map(d=>d.id),use_search:true,
+                  web_search:webSearch.checked,model:modelSelect.value||null})});
         if(!response.ok)throw new Error(await response.text());
-        const data=await response.json();
         chatMessages.removeChild(typingDiv);
-        addMessage({role:'assistant',content:data.content,timestamp:data.timestamp||new Date().toISOString()});
-        conversation.push({role:'user',content:message},{role:'assistant',content:data.content});
+        const assistantDiv=document.createElement('div');assistantDiv.className='message assistant';
+        const contentDiv=document.createElement('div');const timeDiv=document.createElement('div');
+        timeDiv.className='message-time';timeDiv.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        assistantDiv.append(contentDiv,timeDiv);chatMessages.appendChild(assistantDiv);
+        const reader=response.body.getReader();const decoder=new TextDecoder();let buffer='';let assistantContent='';
+        while(true){
+            const chunk=await reader.read();if(chunk.done)break;
+            buffer+=decoder.decode(chunk.value,{stream:true});
+            const events=buffer.split('\n\n');buffer=events.pop();
+            for(const event of events){
+                if(!event.startsWith('data: '))continue;
+                const data=JSON.parse(event.slice(6));
+                if(data.type==='token'){assistantContent+=data.content;contentDiv.innerHTML=escapeHtml(assistantContent);chatMessages.scrollTop=chatMessages.scrollHeight}
+                if(data.type==='done'&&data.response.finish_reason==='error'&&!assistantContent){assistantContent=data.response.content;contentDiv.innerHTML=escapeHtml(assistantContent)}
+            }
+        }
+        conversation.push({role:'user',content:message},{role:'assistant',content:assistantContent});
     }catch(error){
         if(typingDiv.parentNode)chatMessages.removeChild(typingDiv);
         addSystemMessage(`Error: ${error.message}`);
@@ -120,5 +180,7 @@ function formatFileSize(bytes){
     if(bytes<1024*1024)return(bytes/1024).toFixed(1)+' KB';
     return(bytes/(1024*1024)).toFixed(1)+' MB';
 }
+clearHistoryButton.addEventListener('click',()=>clearHistory().catch(error=>addSystemMessage(`Could not clear history: ${error.message}`)));
+loadState();
 </script>
 {% endblock %}

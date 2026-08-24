@@ -1,8 +1,12 @@
 import logging
-from flask import Blueprint, request, jsonify
-from werkzeug.utils import secure_filename
+import json
+import queue
+import threading
+from flask import Blueprint, request, jsonify, Response, stream_with_context
+from pydantic import ValidationError
 from src.api.capgemini_client import CapgeminiClient
 from src.core.chatbot import CapgeminiChatbot
+from src.models.schemas import ChatRequest
 from config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -28,13 +32,40 @@ def health_check():
 def chat():
     try:
         data = request.get_json()
-        if not data or 'message' not in data:
-            return jsonify({'error': 'Message is required'}), 400
+        chat_request = ChatRequest.model_validate(data or {})
         chatbot = get_chatbot()
-        response = chatbot.chat(message=data['message'], temperature=data.get('temperature'),
-                               max_tokens=data.get('max_tokens'), doc_ids=data.get('document_ids'),
-                               use_search=data.get('use_search', True))
-        return jsonify(response), 200
+        events = queue.Queue()
+
+        def on_token(token):
+            events.put({'type': 'token', 'content': token})
+
+        def run_chat():
+            response = chatbot.chat(message=chat_request.message, temperature=chat_request.temperature,
+                                    max_tokens=chat_request.max_tokens, doc_ids=chat_request.document_ids,
+                                    use_search=chat_request.use_search, web_search=chat_request.web_search,
+                                    model=chat_request.model, on_token=on_token)
+            events.put({'type': 'done', 'response': response})
+
+        threading.Thread(target=run_chat, daemon=True).start()
+
+        def stream_events():
+            while True:
+                event = events.get()
+                yield f"data: {json.dumps(event)}\n\n"
+                if event['type'] == 'done':
+                    break
+
+        return Response(stream_with_context(stream_events()), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+    except ValidationError as e:
+        return jsonify({'error': 'Invalid chat request', 'details': e.errors()}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@api_routes.route('/models', methods=['GET'])
+def list_models():
+    try:
+        return jsonify(CapgeminiClient().get_models()), 200
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -50,7 +81,6 @@ def upload_document():
         file_extension = file.filename.rsplit('.', 1)[-1].lower()
         if file_extension not in allowed_extensions:
             return jsonify({'error': f'File type not allowed. Allowed: {", ".join(sorted(allowed_extensions))}'}), 400
-        filename = secure_filename(file.filename)
         chatbot = get_chatbot()
         document = chatbot.upload_document(file)
         return jsonify({'id': document['id'], 'file_name': document['file_name'],
@@ -75,7 +105,9 @@ def delete_document(doc_id: str):
     try:
         chatbot = get_chatbot()
         success = chatbot.remove_document(doc_id)
-        return jsonify({'message': 'Document deleted successfully'}), 200 if success else jsonify({'error': 'Document not found'}), 404
+        if success:
+            return jsonify({'message': 'Document deleted successfully'}), 200
+        return jsonify({'error': 'Document not found'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 

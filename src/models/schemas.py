@@ -26,6 +26,9 @@ class ChatRequest(BaseModel):
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
     max_tokens: Optional[int] = Field(default=None, ge=1, le=4000)
     document_ids: Optional[List[str]] = None
+    use_search: bool = True
+    web_search: bool = False
+    model: Optional[str] = None
 
 class ChatResponse(BaseModel):
     id: str

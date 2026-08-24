@@ -2,7 +2,6 @@ import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Union
-import PyPDF2
 import docx
 
 logger = logging.getLogger(__name__)
@@ -14,23 +13,12 @@ class DocumentProcessor:
         if not file_path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
         extension = file_path.suffix.lower()
-        if extension == '.pdf':
-            return DocumentProcessor._extract_pdf(file_path)
-        elif extension == '.docx':
+        if extension == '.docx':
             return DocumentProcessor._extract_docx(file_path)
         elif extension in ('.txt', '.md'):
             return DocumentProcessor._extract_text_file(file_path)
         else:
             raise ValueError(f"Unsupported file format: {extension}")
-
-    @staticmethod
-    def _extract_pdf(file_path: Path) -> str:
-        try:
-            with open(file_path, 'rb') as file:
-                reader = PyPDF2.PdfReader(file)
-                return "\n".join([page.extract_text() or "" for page in reader.pages]).strip()
-        except Exception as e:
-            raise ValueError(f"Failed to process PDF: {str(e)}")
 
     @staticmethod
     def _extract_docx(file_path: Path) -> str:

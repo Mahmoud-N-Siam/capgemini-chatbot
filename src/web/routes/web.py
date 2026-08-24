@@ -1,4 +1,3 @@
-from pathlib import Path
 from flask import Blueprint, render_template
 
 web_routes = Blueprint('web', __name__)
