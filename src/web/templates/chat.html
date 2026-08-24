@@ -1,0 +1,124 @@
+{% extends "base.html" %}
+{% block title %}Chat{% endblock %}
+{% block extra_css %}
+<style>
+.chat-container{display:flex;max-width:1200px;margin:0 auto;padding:20px;gap:20px}
+.sidebar{width:300px;background:#f8f9fa;border-radius:10px;padding:20px}
+.chat-area{flex:1;display:flex;flex-direction:column;background:white;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);overflow:hidden}
+.chat-messages{flex:1;padding:20px;overflow-y:auto;max-height:600px}
+.message{margin-bottom:15px;padding:12px 16px;border-radius:18px;max-width:80%;word-wrap:break-word}
+.message.user{background:#007bff;color:white;margin-left:auto;border-bottom-right-radius:5px}
+.message.assistant{background:#e9ecef;color:#333;margin-right:auto;border-bottom-left-radius:5px}
+.message.system{background:#fff3cd;color:#856404;margin:0 auto;border-radius:10px;font-size:0.9em;padding:8px 12px}
+.message-time{font-size:0.75em;opacity:0.7;margin-top:4px}
+.chat-input{display:flex;padding:15px;border-top:1px solid #e9ecef;background:#f8f9fa}
+.chat-input input{flex:1;padding:12px 15px;border:1px solid #ddd;border-radius:25px;outline:none;font-size:16px}
+.chat-input button{margin-left:10px;padding:12px 20px;background:#007bff;color:white;border:none;border-radius:25px;cursor:pointer;font-size:16px}
+.chat-input button:hover{background:#0056b3}
+.document-list{max-height:400px;overflow-y:auto}
+.document-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:white;border-radius:8px;margin-bottom:10px;border:1px solid #ddd}
+.document-item .file-name{font-weight:bold;font-size:0.9em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.document-item .file-size{font-size:0.8em;color:#666}
+.upload-area{border:2px dashed #ddd;border-radius:8px;padding:20px;text-align:center;cursor:pointer;margin-bottom:15px}
+.upload-area:hover{border-color:#007bff;background:#f8f9fa}
+.welcome-message{text-align:center;padding:40px 20px;color:#666}
+.typing-indicator{display:inline-flex;gap:5px}
+.typing-indicator span{width:8px;height:8px;background:#666;border-radius:50%;animation:bounce 1.4s infinite ease-in-out both}
+.typing-indicator span:nth-child(1){animation-delay:-0.32s}
+.typing-indicator span:nth-child(2){animation-delay:-0.16s}
+@keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="chat-container">
+    <aside class="sidebar">
+        <h2>📁 Documents</h2>
+        <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
+            <p>📄 Drag & drop or click to browse</p>
+            <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md" style="display:none" onchange="handleFileUpload(event)">
+        </div>
+        <div class="document-list" id="document-list"><p style="text-align:center;color:#666">No documents yet</p></div>
+    </aside>
+    <div class="chat-area">
+        <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message"><h3>Welcome!</h3><p>Upload documents and start chatting.</p></div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="message-input" placeholder="Type your message..." autocomplete="off"
+                   onkeypress="if(event.key==='Enter'&&!event.shiftKey){sendMessage();event.preventDefault()}">
+            <button onclick="sendMessage()" id="send-btn">Send</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+let documents=[];let conversation=[];
+const messageInput=document.getElementById('message-input');
+const sendBtn=document.getElementById('send-btn');
+const chatMessages=document.getElementById('chat-messages');
+const documentList=document.getElementById('document-list');
+const fileInput=document.getElementById('file-input');
+
+function handleFileUpload(event){
+    if(event.target.files.length>0) uploadFile(event.target.files[0]);
+    event.target.value='';
+}
+async function uploadFile(file){
+    const formData=new FormData();formData.append('file',file);
+    try{
+        const response=await fetch('/api/documents/upload',{method:'POST',body:formData});
+        if(!response.ok) throw new Error(await response.text());
+        const data=await response.json();
+        addDocumentToList(data);
+        documents.push(data);
+        addSystemMessage(`Uploaded: ${data.file_name} (${data.chunks} chunks)`);
+    }catch(error){addSystemMessage(`Upload failed: ${error.message}`)}
+}
+function addDocumentToList(doc){
+    const div=document.createElement('div');div.className='document-item';
+    div.innerHTML=`<div><div class="file-name">${doc.file_name}</div><div class="file-size">${formatFileSize(doc.file_size)}</div></div>`;
+    documentList.appendChild(div);
+}
+function addMessage(msg){
+    const div=document.createElement('div');div.className=`message ${msg.role}`;
+    const time=new Date(msg.timestamp||Date.now()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    div.innerHTML=`<div>${escapeHtml(msg.content)}</div><div class="message-time">${time}</div>`;
+    chatMessages.appendChild(div);chatMessages.scrollTop=chatMessages.scrollHeight;
+}
+function addSystemMessage(content){
+    const div=document.createElement('div');div.className='message system';
+    div.innerHTML=`<div>${escapeHtml(content)}</div>`;
+    chatMessages.appendChild(div);chatMessages.scrollTop=chatMessages.scrollHeight;
+}
+async function sendMessage(){
+    const message=messageInput.value.trim();if(!message)return;
+    messageInput.value='';sendBtn.disabled=true;
+    addMessage({role:'user',content:message,timestamp:new Date().toISOString()});
+    const typingDiv=document.createElement('div');typingDiv.className='message assistant';
+    typingDiv.innerHTML='<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingDiv);chatMessages.scrollTop=chatMessages.scrollHeight;
+    try{
+        const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},
+              body:JSON.stringify({message:message,document_ids:documents.map(d=>d.id),use_search:true})});
+        if(!response.ok)throw new Error(await response.text());
+        const data=await response.json();
+        chatMessages.removeChild(typingDiv);
+        addMessage({role:'assistant',content:data.content,timestamp:data.timestamp||new Date().toISOString()});
+        conversation.push({role:'user',content:message},{role:'assistant',content:data.content});
+    }catch(error){
+        if(typingDiv.parentNode)chatMessages.removeChild(typingDiv);
+        addSystemMessage(`Error: ${error.message}`);
+    }finally{sendBtn.disabled=false;messageInput.focus();}
+}
+function escapeHtml(text){
+    const div=document.createElement('div');div.textContent=text;
+    return div.innerHTML.replace(/\n/g,'<br>').replace(/\s\s+/g,' &nbsp;');
+}
+function formatFileSize(bytes){
+    if(bytes<1024)return bytes+' B';
+    if(bytes<1024*1024)return(bytes/1024).toFixed(1)+' KB';
+    return(bytes/(1024*1024)).toFixed(1)+' MB';
+}
+</script>
+{% endblock %}

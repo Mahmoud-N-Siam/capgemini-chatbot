@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Capgemini Chatbot - Home{% endblock %}
+{% block content %}
+<div class="container">
+    <section class="hero">
+        <h2>Welcome to Capgemini Generative Engine Chatbot</h2>
+        <p class="subtitle">A document-aware chatbot powered by Capgemini's API</p>
+        <div class="features">
+            <div class="feature-card">
+                <h3>📄 Document Processing</h3>
+                <p>Upload PDF, Word, and text documents.</p>
+            </div>
+            <div class="feature-card">
+                <h3>💬 Intelligent Chat</h3>
+                <p>Ask questions about your documents.</p>
+            </div>
+            <div class="feature-card">
+                <h3>🔍 Vector Search</h3>
+                <p>Find relevant information instantly.</p>
+            </div>
+        </div>
+        <div class="cta">
+            <a href="{{ url_for('web.chat_page') }}" class="btn btn-primary">Start Chatting →</a>
+        </div>
+    </section>
+    <section class="setup">
+        <h2>🚀 Quick Setup</h2>
+        <div class="setup-steps">
+            <div class="step"><span class="step-number">1</span><h3>Get API Key</h3><p>Add to .env file</p></div>
+            <div class="step"><span class="step-number">2</span><h3>Install</h3><p>pip install -r requirements.txt</p></div>
+            <div class="step"><span class="step-number">3</span><h3>Run</h3><p>python run.py</p></div>
+        </div>
+    </section>
+</div>
+{% endblock %}
