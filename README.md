@@ -65,9 +65,16 @@ Keep the terminal open while using the application. Press `Ctrl+C` to stop it.
 - Search uploaded documents with API embeddings.
 - Receive model responses incrementally through streaming HTTP events.
 - View and clear the current conversation history.
+- Delete individual uploaded documents from the sidebar.
 - Select the configured model from the chat page.
 - Enable web search from the chat page, or ask a current-information question.
 - Search results are limited and included as cited context for the model.
+
+## Security
+
+Real credentials belong only in `.env`, which is ignored by Git. A previous
+commit exposed a live API key in `.env.example`; see `SECURITY.md` for the
+rotation and history-rewrite procedure.
 
 ## Verification
 
@@ -89,6 +96,9 @@ Test the live embeddings connection manually:
 & "C:\Program Files\Python313\python.exe" check_embeddings.py
 ```
 
+Continuous integration runs the same compile and test steps on every push; see
+`.github/workflows/ci.yml`.
+
 ## Configuration
 
 Important settings are in `.env`:
@@ -100,6 +110,10 @@ Important settings are in `.env`:
 - `WEB_SEARCH_TIMEOUT`: maximum wait for a web request.
 - `WEB_SEARCH_MAX_RESULTS`: maximum web results added to the prompt; default is `5`.
 - `MAX_FILE_SIZE`: maximum upload request size in bytes.
+- `EMBEDDING_BATCH_SIZE`: chunks per embeddings request; default is `16`.
+- `EMBEDDING_TIMEOUT`: maximum wait for an embeddings request.
+- `SEARCH_TOP_K` and `SEARCH_THRESHOLD`: retrieval depth and minimum similarity.
+- `MAX_HISTORY_MESSAGES`: conversation turns replayed into each prompt.
 
 Documents, embeddings, and conversation history are held in memory for the
 current process. They are cleared when the server restarts. Uploaded files are

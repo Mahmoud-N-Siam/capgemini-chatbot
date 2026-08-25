@@ -30,10 +30,21 @@ class DocumentProcessor:
 
     @staticmethod
     def _extract_text_file(file_path: Path) -> str:
+        # Uploaded notes are frequently saved in a legacy Windows encoding, so
+        # fall back instead of failing the whole upload.
+        for encoding in ('utf-8', 'utf-8-sig', 'cp1252'):
+            try:
+                with open(file_path, 'r', encoding=encoding) as file:
+                    return file.read().strip()
+            except UnicodeDecodeError:
+                continue
+            except OSError as e:
+                raise ValueError(f"Failed to read text file: {str(e)}")
         try:
-            with open(file_path, 'r', encoding='utf-8') as file:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as file:
+                logger.warning("Decoded %s with replacement characters", file_path.name)
                 return file.read().strip()
-        except Exception as e:
+        except OSError as e:
             raise ValueError(f"Failed to read text file: {str(e)}")
 
     @staticmethod

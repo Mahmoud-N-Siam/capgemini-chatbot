@@ -1,4 +1,6 @@
 import logging
+import re
+import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,13 @@ from src.core.document_search import DocumentSearch
 logger = logging.getLogger(__name__)
 
 class CapgeminiChatbot:
+    MAX_HISTORY_MESSAGES = Settings.MAX_HISTORY_MESSAGES
+    _CURRENT_TERMS_PATTERN = re.compile(
+        r"\b(latest|current|currently|today|now|news|recent|recently|"
+        r"release|releases|released|version|versions|up[- ]to[- ]date)\b",
+        re.IGNORECASE,
+    )
+
     def __init__(self, client: Optional[CapgeminiClient] = None, upload_folder: Optional[Path] = None):
         self.client = client or CapgeminiClient()
         self.upload_folder = upload_folder or Settings.UPLOAD_FOLDER
@@ -24,12 +33,16 @@ class CapgeminiChatbot:
         self.processor = DocumentProcessor()
         self.chunker = TextChunker()
         self.web_search = WebSearch()
+        self._history_lock = threading.Lock()
 
-    @staticmethod
-    def _needs_web_search(message: str) -> bool:
-        message_lower = message.lower()
-        current_terms = ("latest", "current", "today", "now", "news", "release", "version")
-        return any(term in message_lower for term in current_terms)
+    @classmethod
+    def _needs_web_search(cls, message: str) -> bool:
+        """Detect requests for current information using whole-word matching.
+
+        Substring matching would treat words such as "know" (contains "now")
+        as a request for live information, so word boundaries are required.
+        """
+        return bool(cls._CURRENT_TERMS_PATTERN.search(message))
 
     def add_document(self, file_path: Union[str, Path], chunk_strategy: str = "sentences") -> dict:
         file_path = Path(file_path)
@@ -89,11 +102,11 @@ class CapgeminiChatbot:
                             'content': f"You are a helpful AI assistant with access to the following documents:\n{context_prompt}\n\nAnswer questions based on these documents when relevant."})
         else:
             messages.append({'role': 'system', 'content': 'You are a helpful AI assistant.'})
-        for msg in self.conversation_history:
+        for msg in self.conversation_history[-self.MAX_HISTORY_MESSAGES:]:
             messages.append({'role': msg['role'], 'content': msg['content']})
         messages.append({'role': 'user', 'content': message})
         if use_search and self.document_search:
-            results = self.document_search.search(message, k=3, document_ids=doc_ids)
+            results = self.document_search.search(message, k=Settings.SEARCH_TOP_K, document_ids=doc_ids)
             if results:
                 relevant_context = "\n\n".join([f"Relevant document: {meta.get('file_name', 'Unknown')}\n{text}" for _, _, text, meta in results])
                 messages[-1]['content'] = f"{relevant_context}\n\n{message}"
@@ -114,27 +127,32 @@ class CapgeminiChatbot:
         try:
             response = self.client.chat(messages=messages, temperature=temperature,
                                         max_tokens=max_tokens, model=model, on_token=on_token)
-            self.conversation_history.extend([
-                {'role': 'user', 'content': message, 'timestamp': datetime.now()},
-                {'role': 'assistant', 'content': response['content'], 'timestamp': datetime.now()}
-            ])
+            with self._history_lock:
+                self.conversation_history.extend([
+                    {'role': 'user', 'content': message, 'timestamp': datetime.now()},
+                    {'role': 'assistant', 'content': response['content'], 'timestamp': datetime.now()}
+                ])
             return response
         except Exception as e:
             return {'id': str(uuid.uuid4()), 'content': f"Sorry, I encountered an error: {str(e)}",
                     'role': 'assistant', 'finish_reason': 'error'}
 
     def reset_conversation(self):
-        self.conversation_history = []
+        with self._history_lock:
+            self.conversation_history = []
 
     def get_conversation_history(self) -> List[dict]:
-        return self.conversation_history.copy()
+        with self._history_lock:
+            return self.conversation_history.copy()
 
     def get_documents(self) -> List[dict]:
         return list(self.documents.values())
 
     def upload_document(self, file_storage) -> dict:
-        original_name = secure_filename(file_storage.filename or '') or 'uploaded_file'
-        filename = f"{uuid.uuid4()}_{original_name}"
+        original = Path(file_storage.filename or '')
+        suffix = original.suffix.lower()
+        safe_stem = secure_filename(original.stem) or 'uploaded_file'
+        filename = f"{uuid.uuid4()}_{safe_stem}{suffix}"
         file_path = self.upload_folder / filename
         file_storage.save(str(file_path))
         try:

@@ -19,6 +19,9 @@
 .document-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:white;border-radius:8px;margin-bottom:10px;border:1px solid #ddd}
 .document-item .file-name{font-weight:bold;font-size:0.9em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .document-item .file-size{font-size:0.8em;color:#666}
+.document-item .delete-doc{border:none;background:transparent;color:#c00;cursor:pointer;font-size:1em;padding:4px 8px;border-radius:4px;line-height:1}
+.document-item .delete-doc:hover{background:#fdecea}
+.document-item .delete-doc:disabled{opacity:0.5;cursor:default}
 .upload-area{border:2px dashed #ddd;border-radius:8px;padding:20px;text-align:center;cursor:pointer;margin-bottom:15px}
 .upload-area:hover{border-color:#007bff;background:#f8f9fa}
 .chat-options{display:flex;flex-direction:column;gap:10px;margin-bottom:15px;font-size:0.9em}
@@ -96,6 +99,13 @@ function renderDocuments(){
     if(!documents.length){documentList.innerHTML='<p style="text-align:center;color:#666">No documents yet</p>';return}
     documents.forEach(addDocumentToList);
 }
+async function deleteDocument(docId){
+    const response=await fetch(`/api/documents/${encodeURIComponent(docId)}`,{method:'DELETE'});
+    if(!response.ok)throw new Error(await response.text());
+    documents=documents.filter(doc=>doc.id!==docId);
+    renderDocuments();
+    addSystemMessage('Document deleted.');
+}
 async function clearHistory(){
     const response=await fetch('/api/conversation',{method:'DELETE'});
     if(!response.ok)throw new Error(await response.text());
@@ -122,6 +132,14 @@ function addDocumentToList(doc){
     const details=document.createElement('div');const name=document.createElement('div');
     const size=document.createElement('div');name.className='file-name';size.className='file-size';
     name.textContent=doc.file_name;size.textContent=formatFileSize(doc.file_size);details.append(name,size);div.appendChild(details);
+    const remove=document.createElement('button');remove.className='delete-doc';remove.type='button';
+    remove.textContent='✕';remove.title=`Delete ${doc.file_name}`;
+    remove.setAttribute('aria-label',`Delete ${doc.file_name}`);
+    remove.addEventListener('click',()=>{
+        remove.disabled=true;
+        deleteDocument(doc.id).catch(error=>{remove.disabled=false;addSystemMessage(`Delete failed: ${error.message}`)});
+    });
+    div.appendChild(remove);
     if(documentList.querySelector('p'))documentList.innerHTML='';
     documentList.appendChild(div);
 }

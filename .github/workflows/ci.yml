@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      # Settings.validate() requires a key; tests never contact the API.
+      CAPGEMINI_API_KEY: test-key-not-a-real-secret
+      WEB_SEARCH_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Byte-compile sources
+        run: python -m compileall -q config run.py src tests check_embeddings.py
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v

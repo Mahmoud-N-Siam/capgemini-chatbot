@@ -6,10 +6,6 @@ from typing import Any, Dict, List, Optional, Callable
 import websockets
 from config.settings import Settings
 
-logging.basicConfig(
-    level=logging.DEBUG if Settings.DEBUG else logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 class APIError(Exception):
@@ -126,6 +122,10 @@ class CapgeminiClient:
 
         except websockets.exceptions.ConnectionClosed as e:
             logger.warning(f"WebSocket connection closed: {e}")
+        except APIError:
+            # Timeouts and protocol errors must reach the caller instead of
+            # being reported as an empty response.
+            raise
         except Exception as e:
             logger.error(f"Error receiving messages: {type(e).__name__}: {e}")
 
@@ -182,6 +182,8 @@ class CapgeminiClient:
 
                 return response
 
+        except APIError:
+            raise
         except websockets.exceptions.WebSocketException as e:
             logger.error(f"WebSocket error: {type(e).__name__}: {e}")
             raise APIError(f"WebSocket connection failed: {str(e)}")

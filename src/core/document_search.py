@@ -19,40 +19,44 @@ class DocumentSearch:
 
         logger.info(f"Initialized DocumentSearch with model: {self.model_name}")
 
-    def _get_embeddings(self, texts: List[str]) -> List[np.ndarray]:
-        """Get embeddings from Generative Engine API"""
+    def _post_embeddings(self, texts: List[str]) -> List[np.ndarray]:
+        """Send a single embeddings request for the given batch."""
         url = f"{self.api_url}/embeddings"
-
-        # Use both headers for OpenAI-compatible endpoint
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "x-api-key": self.api_key,  # Added this
+            "x-api-key": self.api_key,
             "Content-Type": "application/json"
         }
+        payload = {"input": texts, "model": self.model_name}
 
+        logger.debug(f"Requesting embeddings for {len(texts)} texts")
+        response = requests.post(url, headers=headers, json=payload,
+                                 timeout=Settings.EMBEDDING_TIMEOUT)
+        response.raise_for_status()
+        data = response.json()
+
+        if 'data' not in data:
+            raise ValueError("Invalid response format from embeddings API")
+
+        # The API is not required to preserve input order, so sort by index
+        # when it is provided.
+        items = data['data']
+        if all(isinstance(item, dict) and 'index' in item for item in items):
+            items = sorted(items, key=lambda item: item['index'])
+        embeddings = [np.asarray(item['embedding'], dtype=np.float32) for item in items]
+        if len(embeddings) != len(texts) or any(embedding.ndim != 1 for embedding in embeddings):
+            raise ValueError("Invalid embedding count or shape from embeddings API")
+        return embeddings
+
+    def _get_embeddings(self, texts: List[str]) -> List[np.ndarray]:
+        """Get embeddings from Generative Engine API in bounded batches."""
         try:
-            # API accepts string or list of strings
-            payload = {
-                "input": texts,
-                "model": self.model_name
-            }
-
-            logger.debug(f"Requesting embeddings for {len(texts)} texts")
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
-
-            data = response.json()
-
-            # Extract embeddings from response
-            if 'data' in data:
-                embeddings = [np.array(item['embedding']) for item in data['data']]
-                if len(embeddings) != len(texts) or any(embedding.ndim != 1 for embedding in embeddings):
-                    raise ValueError("Invalid embedding count or shape from embeddings API")
-                logger.debug(f"Generated {len(embeddings)} embeddings")
-                return embeddings
-            else:
-                raise ValueError("Invalid response format from embeddings API")
-
+            batch_size = max(1, Settings.EMBEDDING_BATCH_SIZE)
+            embeddings: List[np.ndarray] = []
+            for start in range(0, len(texts), batch_size):
+                embeddings.extend(self._post_embeddings(texts[start:start + batch_size]))
+            logger.debug(f"Generated {len(embeddings)} embeddings")
+            return embeddings
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to get embeddings: {e}")
             raise RuntimeError(f"Embeddings API request failed: {str(e)}")
@@ -79,44 +83,53 @@ class DocumentSearch:
             logger.error(f"Failed to add documents: {e}")
             raise
 
-    def search(self, query: str, k: int = 3, threshold: float = 0.5,
+    def search(self, query: str, k: Optional[int] = None, threshold: Optional[float] = None,
                document_ids: Optional[List[str]] = None) -> List[Tuple[int, float, str, dict]]:
-        """Search for similar documents using cosine similarity"""
+        """Search for similar documents using vectorized cosine similarity."""
         if not self.documents:
             logger.warning("No documents to search")
             return []
 
+        k = Settings.SEARCH_TOP_K if k is None else k
+        threshold = Settings.SEARCH_THRESHOLD if threshold is None else threshold
+
         try:
-            # Get query embedding
-            query_embeddings = self._get_embeddings([query])
-            query_embedding = query_embeddings[0]
+            query_embedding = self._get_embeddings([query])[0]
+            query_norm = float(np.linalg.norm(query_embedding))
+            if query_norm == 0:
+                return []
 
-            # Calculate cosine similarity with all documents
-            similarities = []
-            for idx, doc_embedding in enumerate(self.embeddings):
-                if document_ids is not None and self.metadata[idx].get('document_id') not in document_ids:
-                    continue
-                # Cosine similarity
-                query_norm = np.linalg.norm(query_embedding)
-                document_norm = np.linalg.norm(doc_embedding)
-                if query_norm == 0 or document_norm == 0:
-                    continue
-                similarity = np.dot(query_embedding, doc_embedding) / (query_norm * document_norm)
-                similarities.append((idx, float(similarity)))
+            candidate_indices = [
+                idx for idx in range(len(self.embeddings))
+                if document_ids is None
+                or self.metadata[idx].get('document_id') in document_ids
+            ]
+            if not candidate_indices:
+                return []
 
-            # Sort by similarity (descending)
-            similarities.sort(key=lambda x: x[1], reverse=True)
+            # One matrix product instead of a per-document Python loop.
+            matrix = np.vstack([self.embeddings[idx] for idx in candidate_indices])
+            document_norms = np.linalg.norm(matrix, axis=1)
+            valid = document_norms > 0
+            if not valid.any():
+                return []
 
-            # Filter by threshold and take top k
+            scores = np.full(len(candidate_indices), -np.inf, dtype=np.float64)
+            scores[valid] = (matrix[valid] @ query_embedding) / (document_norms[valid] * query_norm)
+
+            order = np.argsort(scores)[::-1][:max(0, k)]
             results = []
-            for idx, similarity in similarities[:k]:
-                if similarity >= threshold:
-                    results.append((
-                        idx,
-                        similarity,
-                        self.documents[idx],
-                        self.metadata[idx] if idx < len(self.metadata) else {}
-                    ))
+            for position in order:
+                similarity = float(scores[position])
+                if similarity < threshold or not np.isfinite(similarity):
+                    continue
+                idx = candidate_indices[int(position)]
+                results.append((
+                    idx,
+                    similarity,
+                    self.documents[idx],
+                    self.metadata[idx] if idx < len(self.metadata) else {}
+                ))
 
             logger.debug(f"Found {len(results)} results for query")
             return results

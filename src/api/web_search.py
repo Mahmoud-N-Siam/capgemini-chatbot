@@ -1,6 +1,8 @@
+import html
 import logging
 import re
-from typing import List, Dict
+from typing import Dict, List, Optional
+from urllib.parse import parse_qs, unquote, urlparse
 
 import requests
 
@@ -10,82 +12,83 @@ logger = logging.getLogger(__name__)
 
 
 class WebSearch:
-    """Small optional web-search adapter using DuckDuckGo's JSON endpoint."""
+    """Web-search adapter backed by DuckDuckGo's HTML results page.
 
-    URL = "https://api.duckduckgo.com/"
+    The Instant Answer endpoint (api.duckduckgo.com) only returns curated
+    answers and is empty for most real questions, so the HTML endpoint is used
+    to obtain ranked organic results.
+    """
 
-    def search(self, query: str, max_results: int = None) -> List[Dict[str, str]]:
+    URL = "https://html.duckduckgo.com/html/"
+    HEADERS = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/122.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    _RESULT_PATTERN = re.compile(
+        r'<a[^>]+class="[^"]*result__a[^"]*"[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>'
+        r'(?P<rest>.*?)(?=<a[^>]+class="[^"]*result__a|\Z)',
+        re.IGNORECASE | re.DOTALL,
+    )
+    _SNIPPET_PATTERN = re.compile(
+        r'class="[^"]*result__snippet[^"]*"[^>]*>(?P<snippet>.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    _TAG_PATTERN = re.compile(r"<[^>]+>")
+
+    @classmethod
+    def _clean(cls, markup: str) -> str:
+        return html.unescape(cls._TAG_PATTERN.sub("", markup)).strip()
+
+    @staticmethod
+    def _normalise_url(raw_url: str) -> str:
+        """Unwrap DuckDuckGo's /l/?uddg= redirect wrapper."""
+        if raw_url.startswith("//"):
+            raw_url = f"https:{raw_url}"
+        parsed = urlparse(raw_url)
+        if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+            target = parse_qs(parsed.query).get("uddg", [])
+            if target:
+                return unquote(target[0])
+        return raw_url
+
+    def search(self, query: str, max_results: Optional[int] = None) -> List[Dict[str, str]]:
         if not Settings.WEB_SEARCH_ENABLED:
             return []
         max_results = min(max_results or Settings.WEB_SEARCH_MAX_RESULTS, 10)
+        if max_results <= 0:
+            return []
 
         try:
-            python_results = self._search_python_releases(query)
-            if python_results:
-                return python_results
-            response = requests.get(
+            response = requests.post(
                 self.URL,
-                params={"q": query, "format": "json", "no_html": 1, "no_redirect": 1},
+                data={"q": query, "kl": "wt-wt"},
+                headers=self.HEADERS,
                 timeout=Settings.WEB_SEARCH_TIMEOUT,
             )
             response.raise_for_status()
-            data = response.json()
-            results = []
-            if data.get("AbstractText"):
-                results.append({
-                    "title": data.get("Heading", query),
-                    "url": data.get("AbstractURL", ""),
-                    "snippet": data["AbstractText"],
-                })
-            for topic in data.get("RelatedTopics", []):
-                if "Text" in topic and "FirstURL" in topic:
-                    results.append({
-                        "title": topic["Text"].split(" - ", 1)[0],
-                        "url": topic["FirstURL"],
-                        "snippet": topic["Text"],
-                    })
-                if len(results) >= max_results:
-                    break
-            unique_results = []
-            seen_urls = set()
-            for result in results:
-                if result["url"] and result["url"] not in seen_urls:
-                    unique_results.append(result)
-                    seen_urls.add(result["url"])
-            return unique_results[:max_results]
-        except (requests.RequestException, ValueError) as error:
+        except requests.RequestException as error:
             logger.warning("Web search unavailable: %s", error)
             return []
 
-    def _search_python_releases(self, query: str) -> List[Dict[str, str]]:
-        query_lower = query.lower()
-        if "python" not in query_lower or not any(
-                term in query_lower for term in ("latest", "version", "release")):
-            return []
+        results: List[Dict[str, str]] = []
+        seen_urls = set()
+        for match in self._RESULT_PATTERN.finditer(response.text):
+            url = self._normalise_url(html.unescape(match.group("url")))
+            title = self._clean(match.group("title"))
+            if not url or not title or url in seen_urls:
+                continue
+            snippet_match = self._SNIPPET_PATTERN.search(match.group("rest") or "")
+            snippet = self._clean(snippet_match.group("snippet")) if snippet_match else ""
+            seen_urls.add(url)
+            results.append({"title": title, "url": url, "snippet": snippet or title})
+            # Deduplicate before capping so the caller always gets the full count
+            # when enough distinct results exist.
+            if len(results) >= max_results:
+                break
 
-        try:
-            response = requests.get(
-                "https://api.github.com/repos/python/cpython/tags",
-                params={"per_page": 100},
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "capgemini-chatbot"},
-                timeout=Settings.WEB_SEARCH_TIMEOUT,
-            )
-            response.raise_for_status()
-            stable_versions = [
-                tag["name"] for tag in response.json()
-                if re.fullmatch(r"v\d+\.\d+\.\d+", tag.get("name", ""))
-            ]
-            if not stable_versions:
-                return []
-            stable_versions.sort(
-                key=lambda version: tuple(int(part) for part in version[1:].split(".")),
-                reverse=True,
-            )
-            return [{
-                "title": "CPython releases",
-                "url": "https://github.com/python/cpython/tags",
-                "snippet": f"The latest stable CPython tag listed is {stable_versions[0]}.",
-            }]
-        except (requests.RequestException, ValueError, KeyError) as error:
-            logger.warning("Python release lookup unavailable: %s", error)
-            return []
+        if not results:
+            logger.warning("Web search returned no parsable results for %r", query)
+        return results

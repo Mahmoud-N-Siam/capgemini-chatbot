@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
+from config.settings import Settings
 from .types import MessageRole
+
+MAX_TOKENS_LIMIT = max(Settings.MAX_TOKENS, 4096)
 
 class ChatMessage(BaseModel):
     role: MessageRole
@@ -24,7 +27,7 @@ class Document(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=10000)
     temperature: Optional[float] = Field(default=None, ge=0.0, le=2.0)
-    max_tokens: Optional[int] = Field(default=None, ge=1, le=4000)
+    max_tokens: Optional[int] = Field(default=None, ge=1, le=MAX_TOKENS_LIMIT)
     document_ids: Optional[List[str]] = None
     use_search: bool = True
     web_search: bool = False

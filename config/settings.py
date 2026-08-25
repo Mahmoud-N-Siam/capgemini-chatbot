@@ -29,7 +29,6 @@ class Settings:
     WEB_SEARCH_ENABLED: bool = os.getenv("WEB_SEARCH_ENABLED", "false").lower() == "true"
     WEB_SEARCH_TIMEOUT: float = float(os.getenv("WEB_SEARCH_TIMEOUT", "8"))
     WEB_SEARCH_MAX_RESULTS: int = int(os.getenv("WEB_SEARCH_MAX_RESULTS", "5"))
-
     # Model Parameters
     MAX_TOKENS: int = int(os.getenv("MAX_TOKENS", "4096"))
     TEMPERATURE: float = float(os.getenv("TEMPERATURE", "0.7"))
@@ -46,6 +45,13 @@ class Settings:
 
     # Embeddings
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "amazon.titan-embed-text-v2:0")
+    EMBEDDING_TIMEOUT: float = float(os.getenv("EMBEDDING_TIMEOUT", "30"))
+    EMBEDDING_BATCH_SIZE: int = int(os.getenv("EMBEDDING_BATCH_SIZE", "16"))
+
+    # Retrieval
+    SEARCH_TOP_K: int = int(os.getenv("SEARCH_TOP_K", "3"))
+    SEARCH_THRESHOLD: float = float(os.getenv("SEARCH_THRESHOLD", "0.5"))
+    MAX_HISTORY_MESSAGES: int = int(os.getenv("MAX_HISTORY_MESSAGES", "20"))
 
     @classmethod
     def validate(cls):

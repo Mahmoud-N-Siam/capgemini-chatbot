@@ -2,6 +2,8 @@ import logging
 import json
 import queue
 import threading
+import uuid
+from pathlib import Path
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 from pydantic import ValidationError
 from src.api.capgemini_client import CapgeminiClient
@@ -40,17 +42,29 @@ def chat():
             events.put({'type': 'token', 'content': token})
 
         def run_chat():
-            response = chatbot.chat(message=chat_request.message, temperature=chat_request.temperature,
-                                    max_tokens=chat_request.max_tokens, doc_ids=chat_request.document_ids,
-                                    use_search=chat_request.use_search, web_search=chat_request.web_search,
-                                    model=chat_request.model, on_token=on_token)
+            try:
+                response = chatbot.chat(message=chat_request.message, temperature=chat_request.temperature,
+                                        max_tokens=chat_request.max_tokens, doc_ids=chat_request.document_ids,
+                                        use_search=chat_request.use_search, web_search=chat_request.web_search,
+                                        model=chat_request.model, on_token=on_token)
+            except Exception as error:
+                logger.exception("Chat generation failed")
+                response = {'id': str(uuid.uuid4()), 'content': f"Sorry, I encountered an error: {error}",
+                            'role': 'assistant', 'finish_reason': 'error'}
             events.put({'type': 'done', 'response': response})
 
         threading.Thread(target=run_chat, daemon=True).start()
 
         def stream_events():
+            # The worker always enqueues a terminal event, but a hard crash must
+            # not leave the client waiting forever.
+            deadline = Settings.API_TIMEOUT + 30
             while True:
-                event = events.get()
+                try:
+                    event = events.get(timeout=deadline)
+                except queue.Empty:
+                    yield f"data: {json.dumps({'type': 'done', 'response': {'id': str(uuid.uuid4()), 'content': 'The response timed out before it completed.', 'role': 'assistant', 'finish_reason': 'error'}})}\n\n"
+                    break
                 yield f"data: {json.dumps(event)}\n\n"
                 if event['type'] == 'done':
                     break
@@ -77,10 +91,10 @@ def upload_document():
         file = request.files['file']
         if file.filename == '':
             return jsonify({'error': 'No file selected'}), 400
-        allowed_extensions = {ext.lstrip('.') for ext in Settings.ALLOWED_EXTENSIONS}
-        file_extension = file.filename.rsplit('.', 1)[-1].lower()
-        if file_extension not in allowed_extensions:
-            return jsonify({'error': f'File type not allowed. Allowed: {", ".join(sorted(allowed_extensions))}'}), 400
+        suffix = Path(file.filename).suffix.lower()
+        if suffix not in Settings.ALLOWED_EXTENSIONS:
+            allowed = ", ".join(sorted(ext.lstrip('.') for ext in Settings.ALLOWED_EXTENSIONS))
+            return jsonify({'error': f'File type not allowed. Allowed: {allowed}'}), 400
         chatbot = get_chatbot()
         document = chatbot.upload_document(file)
         return jsonify({'id': document['id'], 'file_name': document['file_name'],
