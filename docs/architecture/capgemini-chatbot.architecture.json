@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Capgemini Generative Engine Chatbot",
+    "subtitle": "Local Flask RAG chatbot with streaming chat, document search, and optional web search",
+    "output": "capgemini-chatbot-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Mahmoud-N-Siam/capgemini-chatbot",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "f3bb050f10732a3529a64a36d7b172859b1f4d01"
+    },
+    "views": [
+      { "id": "chat-request-path", "label": "Chat request path", "focus": ["user", "flask_app", "api_routes", "chatbot", "capgemini_client", "capgemini_engine"], "note": "Follow a chat message from the browser to the streamed model response." },
+      { "id": "document-rag-pipeline", "label": "Document RAG pipeline", "focus": ["chatbot", "document_processor", "document_search", "uploads", "capgemini_engine"], "note": "Upload extraction, chunking, and API-based embedding search for retrieval." },
+      { "id": "web-search-augmentation", "label": "Web search augmentation", "focus": ["chatbot", "web_search", "duckduckgo"], "note": "Optional DuckDuckGo lookup injected as cited context for current-info questions." }
+    ]
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "Browser Client", "sublabel": "localhost only", "pos": [40, 260], "size": [130, 60] },
+    { "id": "flask_app", "type": "frontend", "label": "Flask Web UI", "sublabel": "index.html / chat.html", "pos": [230, 260], "size": [150, 60], "sources": [{ "path": "src/web/routes/web.py", "line": 1, "end_line": 11, "label": "web routes" }] },
+    { "id": "api_routes", "type": "backend", "label": "REST API", "sublabel": "Blueprint api.py", "pos": [440, 260], "size": [150, 60], "sources": [{ "path": "src/web/routes/api.py", "line": 33, "end_line": 77, "label": "chat endpoint" }] },
+    { "id": "chatbot", "type": "backend", "label": "Chatbot Orchestrator", "sublabel": "CapgeminiChatbot", "tag": "in-memory history", "pos": [650, 250], "size": [170, 80], "sources": [{ "path": "src/core/chatbot.py", "line": 18, "end_line": 162, "label": "orchestrator" }] },
+    { "id": "capgemini_client", "type": "backend", "label": "Capgemini Client", "sublabel": "WebSocket chat", "pos": [880, 260], "size": [170, 60], "sources": [{ "path": "src/api/capgemini_client.py", "line": 18, "end_line": 60, "label": "WS client" }] },
+    { "id": "capgemini_engine", "type": "cloud", "label": "Capgemini Generative Engine", "sublabel": "WSS chat + REST embeddings", "pos": [1110, 235], "size": [200, 110] },
+    { "id": "document_processor", "type": "backend", "label": "Document Processor", "sublabel": "extract + chunk", "pos": [230, 520], "size": [170, 60], "sources": [{ "path": "src/documents/processors.py", "line": 9, "end_line": 21, "label": "extractor" }] },
+    { "id": "web_search", "type": "backend", "label": "Web Search Adapter", "sublabel": "DuckDuckGo client", "pos": [460, 520], "size": [170, 60], "sources": [{ "path": "src/api/web_search.py", "line": 14, "end_line": 20, "label": "search adapter" }] },
+    { "id": "document_search", "type": "backend", "label": "Document Search", "sublabel": "embeddings index", "pos": [880, 520], "size": [170, 60], "sources": [{ "path": "src/core/document_search.py", "line": 9, "end_line": 20, "label": "vector search" }] },
+    { "id": "uploads", "type": "database", "label": "Uploads Folder", "sublabel": "local disk storage", "pos": [230, 650], "size": [170, 60], "sources": [{ "path": "config/settings.py", "line": 24, "end_line": 26, "label": "upload path" }] },
+    { "id": "duckduckgo", "type": "external", "label": "DuckDuckGo", "sublabel": "html.duckduckgo.com", "pos": [460, 650], "size": [170, 60] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Local Flask Process (127.0.0.1:5000)", "wraps": ["flask_app", "api_routes", "chatbot", "capgemini_client", "document_processor", "web_search", "document_search", "uploads"], "pad": 26 }
+  ],
+  "connections": [
+    { "id": "user-to-flaskapp", "from": "user", "to": "flask_app", "label": "GET / , /chat", "labelAt": [200, 334] },
+    { "id": "user-to-api", "from": "user", "to": "api_routes", "label": "fetch /api/* (JSON + SSE)", "variant": "emphasis", "fromSide": "top", "toSide": "top" },
+    { "id": "api-to-chatbot", "from": "api_routes", "to": "chatbot", "label": "chat() / upload_document()", "labelAt": [620, 344] },
+    { "id": "chatbot-to-client", "from": "chatbot", "to": "capgemini_client", "label": "chat(messages) stream", "labelAt": [850, 344] },
+    { "id": "client-to-engine", "from": "capgemini_client", "to": "capgemini_engine", "label": "wss chat + tokens", "fromSide": "right", "toSide": "left", "labelAt": [1080, 359] },
+    { "id": "chatbot-to-processor", "from": "chatbot", "to": "document_processor", "label": "extract_text() + chunk()", "fromSide": "bottom", "toSide": "top" },
+    { "id": "chatbot-to-websearch", "from": "chatbot", "to": "web_search", "label": "search(query)", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "id": "chatbot-to-search", "from": "chatbot", "to": "document_search", "label": "add_documents() / search()", "fromSide": "bottom", "toSide": "top" },
+    { "id": "processor-to-uploads", "from": "document_processor", "to": "uploads", "label": "read saved file", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelAt": [315, 594] },
+    { "id": "websearch-to-ddg", "from": "web_search", "to": "duckduckgo", "label": "POST html.duckduckgo.com/html", "fromSide": "bottom", "toSide": "top", "labelAt": [545, 594] },
+    { "id": "search-to-engine", "from": "document_search", "to": "capgemini_engine", "label": "POST /v1/embeddings", "fromSide": "right", "toSide": "bottom", "via": [[1210, 550]], "labelAt": [1210, 470] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Web Layer", "items": ["Flask blueprints serve HTML pages and a JSON/SSE REST API", "Runs local-only, bound to 127.0.0.1:5000"] },
+    { "dot": "emerald", "title": "Core Orchestration", "items": ["CapgeminiChatbot coordinates documents, search, web search, and the model client", "Conversation history is held in memory, bounded by MAX_HISTORY_MESSAGES"] },
+    { "dot": "violet", "title": "Document Pipeline", "items": ["DocumentProcessor extracts text from DOCX, TXT, and MD uploads", "TextChunker splits by sentences, paragraphs, or fixed size", "DocumentSearch embeds chunks and ranks them by cosine similarity"] },
+    { "dot": "amber", "title": "External Services", "items": ["Capgemini Generative Engine: WebSocket for streaming chat, REST for embeddings", "DuckDuckGo HTML search adds cited web context when enabled"] }
+  ]
+}

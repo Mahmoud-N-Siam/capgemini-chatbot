@@ -1,0 +1,204 @@
+{% extends "base.html" %}
+{% block title %}Chat{% endblock %}
+{% block extra_css %}
+<style>
+.chat-container{display:flex;max-width:1200px;margin:0 auto;padding:20px;gap:20px}
+.sidebar{width:300px;background:#f8f9fa;border-radius:10px;padding:20px}
+.chat-area{flex:1;display:flex;flex-direction:column;background:white;border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,0.1);overflow:hidden}
+.chat-messages{flex:1;padding:20px;overflow-y:auto;max-height:600px}
+.message{margin-bottom:15px;padding:12px 16px;border-radius:18px;max-width:80%;word-wrap:break-word}
+.message.user{background:#007bff;color:white;margin-left:auto;border-bottom-right-radius:5px}
+.message.assistant{background:#e9ecef;color:#333;margin-right:auto;border-bottom-left-radius:5px}
+.message.system{background:#fff3cd;color:#856404;margin:0 auto;border-radius:10px;font-size:0.9em;padding:8px 12px}
+.message-time{font-size:0.75em;opacity:0.7;margin-top:4px}
+.chat-input{display:flex;padding:15px;border-top:1px solid #e9ecef;background:#f8f9fa}
+.chat-input input{flex:1;padding:12px 15px;border:1px solid #ddd;border-radius:25px;outline:none;font-size:16px}
+.chat-input button{margin-left:10px;padding:12px 20px;background:#007bff;color:white;border:none;border-radius:25px;cursor:pointer;font-size:16px}
+.chat-input button:hover{background:#0056b3}
+.document-list{max-height:400px;overflow-y:auto}
+.document-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:white;border-radius:8px;margin-bottom:10px;border:1px solid #ddd}
+.document-item .file-name{font-weight:bold;font-size:0.9em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.document-item .file-size{font-size:0.8em;color:#666}
+.document-item .delete-doc{border:none;background:transparent;color:#c00;cursor:pointer;font-size:1em;padding:4px 8px;border-radius:4px;line-height:1}
+.document-item .delete-doc:hover{background:#fdecea}
+.document-item .delete-doc:disabled{opacity:0.5;cursor:default}
+.upload-area{border:2px dashed #ddd;border-radius:8px;padding:20px;text-align:center;cursor:pointer;margin-bottom:15px}
+.upload-area:hover{border-color:#007bff;background:#f8f9fa}
+.chat-options{display:flex;flex-direction:column;gap:10px;margin-bottom:15px;font-size:0.9em}
+.chat-options label{display:flex;align-items:center;gap:8px}
+.chat-options select{width:100%;padding:8px;border:1px solid #ddd;border-radius:6px;background:white}
+.clear-history{width:100%;padding:8px;border:1px solid #ccc;border-radius:6px;background:white;cursor:pointer}
+.welcome-message{text-align:center;padding:40px 20px;color:#666}
+.typing-indicator{display:inline-flex;gap:5px}
+.typing-indicator span{width:8px;height:8px;background:#666;border-radius:50%;animation:bounce 1.4s infinite ease-in-out both}
+.typing-indicator span:nth-child(1){animation-delay:-0.32s}
+.typing-indicator span:nth-child(2){animation-delay:-0.16s}
+@keyframes bounce{0%,80%,100%{transform:scale(0)}40%{transform:scale(1)}}
+</style>
+{% endblock %}
+{% block content %}
+<div class="chat-container">
+    <aside class="sidebar">
+        <h2>📁 Documents</h2>
+        <div class="upload-area" id="upload-area" onclick="document.getElementById('file-input').click()">
+            <p>📄 Drag & drop or click to browse</p>
+            <input type="file" id="file-input" accept=".docx,.txt,.md" style="display:none" onchange="handleFileUpload(event)">
+        </div>
+        <div class="document-list" id="document-list"><p style="text-align:center;color:#666">No documents yet</p></div>
+        <div class="chat-options">
+            <label for="model-select">Model</label>
+            <select id="model-select" aria-label="Model"></select>
+            <label><input type="checkbox" id="web-search"> Use web search</label>
+            <button type="button" class="clear-history" id="clear-history">Clear history</button>
+        </div>
+    </aside>
+    <div class="chat-area">
+        <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message"><h3>Welcome!</h3><p>Upload documents and start chatting.</p></div>
+        </div>
+        <div class="chat-input">
+            <input type="text" id="message-input" placeholder="Type your message..." autocomplete="off"
+                   onkeypress="if(event.key==='Enter'&&!event.shiftKey){sendMessage();event.preventDefault()}">
+            <button onclick="sendMessage()" id="send-btn">Send</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+{% block extra_js %}
+<script>
+let documents=[];let conversation=[];
+const messageInput=document.getElementById('message-input');
+const sendBtn=document.getElementById('send-btn');
+const chatMessages=document.getElementById('chat-messages');
+const documentList=document.getElementById('document-list');
+const fileInput=document.getElementById('file-input');
+const modelSelect=document.getElementById('model-select');
+const webSearch=document.getElementById('web-search');
+const clearHistoryButton=document.getElementById('clear-history');
+
+async function loadState(){
+    try{
+        const [documentsResponse,historyResponse,modelsResponse]=await Promise.all([
+            fetch('/api/documents'),fetch('/api/conversation'),fetch('/api/models')
+        ]);
+        if(!documentsResponse.ok||!historyResponse.ok||!modelsResponse.ok)throw new Error('Could not load chat state');
+        documents=await documentsResponse.json();
+        renderDocuments();
+        const history=await historyResponse.json();
+        if(history.length){chatMessages.innerHTML='';history.forEach(addMessage);conversation=history}
+        const models=await modelsResponse.json();
+        modelSelect.innerHTML='';
+        models.forEach(model=>{
+            const option=document.createElement('option');option.value=model.name;
+            option.textContent=model.name;modelSelect.appendChild(option);
+        });
+    }catch(error){addSystemMessage(`Could not load saved state: ${error.message}`)}
+}
+function renderDocuments(){
+    documentList.innerHTML='';
+    if(!documents.length){documentList.innerHTML='<p style="text-align:center;color:#666">No documents yet</p>';return}
+    documents.forEach(addDocumentToList);
+}
+async function deleteDocument(docId){
+    const response=await fetch(`/api/documents/${encodeURIComponent(docId)}`,{method:'DELETE'});
+    if(!response.ok)throw new Error(await response.text());
+    documents=documents.filter(doc=>doc.id!==docId);
+    renderDocuments();
+    addSystemMessage('Document deleted.');
+}
+async function clearHistory(){
+    const response=await fetch('/api/conversation',{method:'DELETE'});
+    if(!response.ok)throw new Error(await response.text());
+    conversation=[];chatMessages.innerHTML='<div class="welcome-message"><h3>Welcome!</h3><p>Upload documents and start chatting.</p></div>';
+}
+
+function handleFileUpload(event){
+    if(event.target.files.length>0) uploadFile(event.target.files[0]);
+    event.target.value='';
+}
+async function uploadFile(file){
+    const formData=new FormData();formData.append('file',file);
+    try{
+        const response=await fetch('/api/documents/upload',{method:'POST',body:formData});
+        if(!response.ok) throw new Error(await response.text());
+        const data=await response.json();
+        addDocumentToList(data);
+        documents.push(data);
+        addSystemMessage(`Uploaded: ${data.file_name} (${data.chunks} chunks)`);
+    }catch(error){addSystemMessage(`Upload failed: ${error.message}`)}
+}
+function addDocumentToList(doc){
+    const div=document.createElement('div');div.className='document-item';
+    const details=document.createElement('div');const name=document.createElement('div');
+    const size=document.createElement('div');name.className='file-name';size.className='file-size';
+    name.textContent=doc.file_name;size.textContent=formatFileSize(doc.file_size);details.append(name,size);div.appendChild(details);
+    const remove=document.createElement('button');remove.className='delete-doc';remove.type='button';
+    remove.textContent='✕';remove.title=`Delete ${doc.file_name}`;
+    remove.setAttribute('aria-label',`Delete ${doc.file_name}`);
+    remove.addEventListener('click',()=>{
+        remove.disabled=true;
+        deleteDocument(doc.id).catch(error=>{remove.disabled=false;addSystemMessage(`Delete failed: ${error.message}`)});
+    });
+    div.appendChild(remove);
+    if(documentList.querySelector('p'))documentList.innerHTML='';
+    documentList.appendChild(div);
+}
+function addMessage(msg){
+    const div=document.createElement('div');div.className=`message ${msg.role}`;
+    const time=new Date(msg.timestamp||Date.now()).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    div.innerHTML=`<div>${escapeHtml(msg.content)}</div><div class="message-time">${time}</div>`;
+    chatMessages.appendChild(div);chatMessages.scrollTop=chatMessages.scrollHeight;
+}
+function addSystemMessage(content){
+    const div=document.createElement('div');div.className='message system';
+    div.innerHTML=`<div>${escapeHtml(content)}</div>`;
+    chatMessages.appendChild(div);chatMessages.scrollTop=chatMessages.scrollHeight;
+}
+async function sendMessage(){
+    const message=messageInput.value.trim();if(!message)return;
+    messageInput.value='';sendBtn.disabled=true;
+    addMessage({role:'user',content:message,timestamp:new Date().toISOString()});
+    const typingDiv=document.createElement('div');typingDiv.className='message assistant';
+    typingDiv.innerHTML='<div class="typing-indicator"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingDiv);chatMessages.scrollTop=chatMessages.scrollHeight;
+    try{
+        const response=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json','Accept':'text/event-stream'},
+              body:JSON.stringify({message:message,document_ids:documents.map(d=>d.id),use_search:true,
+                  web_search:webSearch.checked,model:modelSelect.value||null})});
+        if(!response.ok)throw new Error(await response.text());
+        chatMessages.removeChild(typingDiv);
+        const assistantDiv=document.createElement('div');assistantDiv.className='message assistant';
+        const contentDiv=document.createElement('div');const timeDiv=document.createElement('div');
+        timeDiv.className='message-time';timeDiv.textContent=new Date().toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        assistantDiv.append(contentDiv,timeDiv);chatMessages.appendChild(assistantDiv);
+        const reader=response.body.getReader();const decoder=new TextDecoder();let buffer='';let assistantContent='';
+        while(true){
+            const chunk=await reader.read();if(chunk.done)break;
+            buffer+=decoder.decode(chunk.value,{stream:true});
+            const events=buffer.split('\n\n');buffer=events.pop();
+            for(const event of events){
+                if(!event.startsWith('data: '))continue;
+                const data=JSON.parse(event.slice(6));
+                if(data.type==='token'){assistantContent+=data.content;contentDiv.innerHTML=escapeHtml(assistantContent);chatMessages.scrollTop=chatMessages.scrollHeight}
+                if(data.type==='done'&&data.response.finish_reason==='error'&&!assistantContent){assistantContent=data.response.content;contentDiv.innerHTML=escapeHtml(assistantContent)}
+            }
+        }
+        conversation.push({role:'user',content:message},{role:'assistant',content:assistantContent});
+    }catch(error){
+        if(typingDiv.parentNode)chatMessages.removeChild(typingDiv);
+        addSystemMessage(`Error: ${error.message}`);
+    }finally{sendBtn.disabled=false;messageInput.focus();}
+}
+function escapeHtml(text){
+    const div=document.createElement('div');div.textContent=text;
+    return div.innerHTML.replace(/\n/g,'<br>').replace(/\s\s+/g,' &nbsp;');
+}
+function formatFileSize(bytes){
+    if(bytes<1024)return bytes+' B';
+    if(bytes<1024*1024)return(bytes/1024).toFixed(1)+' KB';
+    return(bytes/(1024*1024)).toFixed(1)+' MB';
+}
+clearHistoryButton.addEventListener('click',()=>clearHistory().catch(error=>addSystemMessage(`Could not clear history: ${error.message}`)));
+loadState();
+</script>
+{% endblock %}

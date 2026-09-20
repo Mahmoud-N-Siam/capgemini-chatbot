@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Capgemini Chatbot{% endblock %}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <header>
+        <div class="header-content">
+            <h1>🤖 Capgemini Generative Engine Chatbot</h1>
+            <nav>
+                <a href="{{ url_for('web.index') }}">Home</a>
+                <a href="{{ url_for('web.chat_page') }}">Chat</a>
+            </nav>
+        </div>
+    </header>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+    <footer>
+        <div class="footer-content">
+            <p>Powered by Capgemini Generative Engine API</p>
+        </div>
+    </footer>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>
